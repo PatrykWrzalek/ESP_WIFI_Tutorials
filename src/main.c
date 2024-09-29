@@ -1,8 +1,11 @@
 #include "esp_common.h"
 #include "freertos/task.h"
 #include "gpio.h"
+#include "uart.h"
 
 // put definition here:
+#define MAX_SSID_LENGTH 32 // Maksymalna długość SSID (nazwy sieci)
+#define MAX_NETWORKS 20    // Maksymalna ilość sieci (wyszukiwanych)
 
 // put function declarations here:
 
@@ -60,13 +63,28 @@ uint32 user_rf_cal_sector_set(void)
  *******************************************************************************/
 void user_init(void) // there is a main() function
 {
+    // Inicjalizacja GPIO
     GPIO_ConfigTypeDef io_conf;
     io_conf.GPIO_Pin = ((1 << 2));
     io_conf.GPIO_Mode = GPIO_Mode_Output;
     io_conf.GPIO_Pullup = GPIO_PullUp_DIS;
     io_conf.GPIO_IntrType = GPIO_PIN_INTR_DISABLE;
 
-    gpio_config(&io_conf);
+    gpio_config(&io_conf); // Wgranie konfiguracji GPIO
+
+    UART_WaitTxFifoEmpty(UART0);
+
+    // Inicjalizacja UART0 do wyjścia
+    UART_ConfigTypeDef uart0_conf;
+    uart0_conf.baud_rate = BIT_RATE_115200;
+    uart0_conf.data_bits = UART_WordLength_8b;
+    uart0_conf.parity = PARITY_DIS;
+    uart0_conf.stop_bits = USART_StopBits_1;
+    uart0_conf.flow_ctrl = USART_HardwareFlowControl_None;
+
+    UART_ParamConfig(UART0, &uart0_conf); // Wgranie konfiguracji UART0
+    UART_SetPrintPort(UART0);             // Wybranie uart do komunikacji przez funkcję os_printf
+    os_printf("Inicjalizacja...\n");
 
     while (1)
     {
