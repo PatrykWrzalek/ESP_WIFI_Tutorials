@@ -1,10 +1,16 @@
 #include "esp_common.h"
 #include "freertos/task.h"
 #include "gpio.h"
+#include "uart.h"
 
 // put definition here:
+#define MAX_SSID_LENGTH 32 // Maksymalna długość SSID (nazwy sieci)
+#define MAX_NETWORKS 20    // Maksymalna ilość sieci (wyszukiwanych)
 
 // put function declarations here:
+void status_LED(void *ignore);
+void scan_done(void *arg, STATUS status);
+void wifi_scan(void *ignore);
 
 /******************************************************************************
  * FunctionName : user_rf_cal_sector_set
@@ -60,21 +66,120 @@ uint32 user_rf_cal_sector_set(void)
  *******************************************************************************/
 void user_init(void) // there is a main() function
 {
+    // Inicjalizacja GPIO
     GPIO_ConfigTypeDef io_conf;
     io_conf.GPIO_Pin = ((1 << 2));
     io_conf.GPIO_Mode = GPIO_Mode_Output;
     io_conf.GPIO_Pullup = GPIO_PullUp_DIS;
     io_conf.GPIO_IntrType = GPIO_PIN_INTR_DISABLE;
 
-    gpio_config(&io_conf);
+    gpio_config(&io_conf); // Wgranie konfiguracji GPIO
 
-    while (1)
+    UART_WaitTxFifoEmpty(UART0);
+
+    // Inicjalizacja UART0 do wyjścia
+    UART_ConfigTypeDef uart0_conf;
+    uart0_conf.baud_rate = BIT_RATE_115200;
+    uart0_conf.data_bits = UART_WordLength_8b;
+    uart0_conf.parity = PARITY_DIS;
+    uart0_conf.stop_bits = USART_StopBits_1;
+    uart0_conf.flow_ctrl = USART_HardwareFlowControl_None;
+
+    UART_ParamConfig(UART0, &uart0_conf); // Wgranie konfiguracji UART0
+    UART_SetPrintPort(UART0);             // Wybranie uart do komunikacji przez funkcję os_printf
+
+    xTaskCreate(wifi_scan, "WiFi", 1024, NULL, 3, NULL);
+
+    xTaskCreate(status_LED, "Status", 512, NULL, 1, NULL);
+}
+
+// put function definitions here:
+
+/******************************************************************************
+ * FunctionName : status_LED
+ * Description  : on board LED blinking every 1s for 1s.
+ * Parameters   : none
+ * Returns      : none
+ *******************************************************************************/
+void status_LED(void *ignore)
+{
+    while (true)
     {
         GPIO_OUTPUT_SET(2, 0);
         vTaskDelay(1000 / portTICK_RATE_MS);
         GPIO_OUTPUT_SET(2, 1);
         vTaskDelay(1000 / portTICK_RATE_MS);
     }
+    vTaskDelete(NULL); // Usunięcie zadania
 }
+/******************************************************************************
+ * FunctionName : scan_done
+ * Description  : Callback function invoked after Wi-Fi scanning is completed.
+ * Parameters   : none
+ * Returns      : none
+ *******************************************************************************/
+void scan_done(void *arg, STATUS status)
+{
+    // Sprawdzenie, czy skanowanie zakończyło się sukcesem
+    if (status == OK)
+    {
+        struct bss_info *bss = (struct bss_info *)arg; // Zmienna 'bss' wskazuje na pierwszy wynik skanowania (informacje o pierwszej znalezionej sieci)
+        os_printf("Skanowanie zakonczone.\r\n Znaleziono sieci:\r\n");
 
-// put function definitions here:
+        while (bss != NULL) // Przechodzimy przez listę wyników, dopóki są znalezione sieci
+        {
+            os_printf("SSID: %s \r\nRSSI: %d \r\nKanal: %d \r\nUkryta: %s\r\n", // Wyświetlenie informacji o znalezionej sieci:
+                      bss->ssid,                                                // - Nazwa sieci (SSID)
+                      bss->rssi,                                                // - Moc sygnału (RSSI)
+                      bss->channel,                                             // - Numer kanału, na którym pracuje sieć
+                      bss->is_hidden ? "Tak" : "Nie");                          // - Informacja, czy sieć jest ukryta (hidden)
+
+            bss = bss->next.stqe_next; // Przejście do następnej sieci w liście wyników skanowania
+        }
+    }
+    else
+    {
+        os_printf("Blad skanowania\r\n"); // Jeżeli skanowanie zakończyło się błędem, wyświetl komunikat
+    }
+}
+/******************************************************************************
+ * FunctionName : wifi_scan
+ * Description  : Function that searches for AP's in STA mode (WiFi client) of ESP.
+ * Parameters   : none
+ * Returns      : none
+ *******************************************************************************/
+void wifi_scan(void *ignore)
+{
+    // os_printf("Inicjalizacja...\n"); // for debug
+    vTaskDelay(10000 / portTICK_RATE_MS); // Inicjacja WiFi po 10s, czas na włączenie podglądu portu szeregowego
+
+    ///////////////////////////////////////////////////////////////////////////////////////
+    ///*                                    Note:                                       *//
+    // W trakcie zmiany trybu pracy WiFi (konfiguracji) można zaobserwować po przez UART //
+    // wyświetlenie komunikatów związanych z konfiguracją WiFi takich jak:               //
+    //                                                                                   //
+    // bcn 0 - zaprzestanie wysyłania komunikatów "beacon" (rozgłoszeniowych AP od ESP)  //
+    // del if1 - usunięcie interfejsu sieciowego num1, wykorzystywanego jako AP          //
+    // usl i sul 0 0 - komunikaty związane z obsługą stosu sieciowego                    //
+    // mode : sta(adres.MAC) - komunikat o przełączeniu w tryb stacji oraz adres.MAC dla //
+    //        urządzenia ESP w trybie stacji                                             //
+    // add if0 - dodanie interfejsu sieciowego num0, wykorzystywanego jako STA (STA)     //
+    ///////////////////////////////////////////////////////////////////////////////////////
+    // (AP) - Access Point (Punkt dostępu - ESP działa jak klient Wi-Fi)                 //
+    // (STA) - Station (Stacja - ESP działa jak router Wi-Fi)                            //
+    ///////////////////////////////////////////////////////////////////////////////////////
+    wifi_set_opmode_current(STATION_MODE); // Ustaw tryb stacji Wi-Fi
+    ///////////////////////////////////////////////////////////////////////////////////////
+    ///*                                    Note2:                                      *//
+    // Nie należy ustawiać trybu pracy WiFi w funkcji user_init(), gdyz grozi to błędami!//
+    ///////////////////////////////////////////////////////////////////////////////////////
+
+    struct scan_config scanConf;
+    scanConf.ssid = NULL;     // Skanuj wszystkie nazwy sieci
+    scanConf.bssid = NULL;    // Skanuj wszystkie MAC.addresy sieci
+    scanConf.channel = 0;     // Skanuj wszystkie kanały
+    scanConf.show_hidden = 1; // Pokaż również ukryte sieci
+
+    wifi_station_scan(&scanConf, scan_done); // Funkcja rozpoczynająca skanowanie sieci
+    vTaskDelete(NULL);                       // Usunięcie zadania
+}
