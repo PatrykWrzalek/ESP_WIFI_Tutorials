@@ -4,7 +4,7 @@
 #include "gpio.h"
 #include "uart.h"
 #include "lwip\netifapi.h"
-#include "esp_system.h"
+#include "lwip\lwip\tcp.h"
 
 // put definition here:
 #define MAX_SSID_LENGTH 32 // Maksymalna długość SSID (nazwy sieci)
@@ -15,12 +15,41 @@
 #define MAX_CLIENTS 4          // Definicja max ilości klientów
 #define CHANNEL 0              // Definicja kanału (not in use)
 
-// put function declarations here:
+// put Task declarations here:
 void status_LED(void *ignore);
-void scan_done(void *arg, STATUS status);
 void wifi_scan(void *ignore);
 void softap_init(void *ignore);
 
+// put function declarations here:
+void scan_done(void *arg, STATUS status);
+void start_tcp_server();
+
+// put global variables, etc. here:
+struct tcp_pcb *server_pcb;
+
+// Funkcja callback do obsługi przychodzących połączeń i wysłania "Hello World"
+err_t tcp_accept_callback(void *arg, struct tcp_pcb *newpcb, err_t err)
+{
+    // Tworzymy wiadomość odpowiedzi HTTP
+    char *response = "HTTP/1.1 200 OK\r\n"
+                     "Content-Type: text/plain\r\n\r\n"
+                     "Hello, World from ESP8266!";
+
+    err_t write_err = tcp_write(newpcb, response, strlen(response), TCP_WRITE_FLAG_COPY); // Wyślij odpowiedź do klienta
+    if (write_err == ERR_OK)                                                              // Warunek wykonania jeśli zapis się powiódł
+    {
+        tcp_output(newpcb); // Wyślij dane
+        // os_printf("Created TCP server PCB\r\n"); // for debug
+    }
+    else
+    {
+        // os_printf("Error during tcp_write: %d\r\n", write_err); // for debug
+    }
+
+    tcp_close(newpcb); // Zamknij połączenie
+
+    return ERR_OK; // Zwróć status OK, co oznacza pomyślne zakończenie obsługi połączenia
+}
 /******************************************************************************
  * FunctionName : user_rf_cal_sector_set
  * Description  : SDK just reversed 4 sectors, used for rf init data and paramters.
@@ -235,5 +264,34 @@ void softap_init(void *ignore)
     // vTaskDelay(5000 / portTICK_RATE_MS);
     // os_printf("\e[1;1H\e[2J\r\r"); // clear screen in terminal
 
+    start_tcp_server(); // test
+
     vTaskDelete(NULL); // Usunięcie zadania
+}
+/******************************************************************************
+ * FunctionName : start_tcp_server
+ * Description  : Function to initialize the TCP server.
+ * Parameters   : none
+ * Returns      : none
+ *******************************************************************************/
+void start_tcp_server()
+{
+    server_pcb = tcp_new(); // Utwórz nową strukturę PCB (Protocol Control Block)
+
+    if (server_pcb != NULL)
+    {
+        // Jeśli PCB zostało poprawnie utworzone, serwer przechodzi do nasłuchiwania
+        tcp_bind(server_pcb, IP_ADDR_ANY, 80); // Powiąż serwer z dowolnym adresem IP i portem 80 (standardowy port HTTP)
+
+        server_pcb = tcp_listen(server_pcb); // Ustaw serwer w trybie nasłuchiwania na nowe połączenia
+
+        tcp_accept(server_pcb, tcp_accept_callback); // Zarejestruj funkcję callback do obsługi nowych połączeń
+
+        os_printf("Created TCP server PCB\r\n");
+    }
+    else
+    {
+        // Jeśli nie udało się utworzyć PCB, wyświetl komunikat o błędzie
+        os_printf("Error: Unable to create TCP server PCB\r\n");
+    }
 }
