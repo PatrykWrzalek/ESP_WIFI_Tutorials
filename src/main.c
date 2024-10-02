@@ -10,10 +10,12 @@
 #define MAX_SSID_LENGTH 32 // Maksymalna długość SSID (nazwy sieci)
 #define MAX_NETWORKS 20    // Maksymalna ilość sieci (wyszukiwanych)
 
-#define ESP_AP_SSID "ESP_Iot"  // Definicja SSID
-#define ESP_AP_PASS "12345678" // Definicja hasła
-#define MAX_CLIENTS 4          // Definicja max ilości klientów
-#define CHANNEL 0              // Definicja kanału (not in use)
+#define ESP_AP_SSID "ESP_Iot"      // Definicja SSID dla AP
+#define ESP_AP_PASS "12345678"     // Definicja hasła dla AP
+#define ESP_AP_CHANNEL 0           // Definicja kanału dla AP [not in use]
+#define ESP_AP_MAX_CLIENTS 4       // Definicja max ilości klientów dla AP (max 4)
+#define ESP_AP_HIDDEN 0            // Definicja widoczności sieci dla AP (0 - sieć widoczna, 1 - sieć ukryta) [not in use]
+#define ESP_AP_beacon_interval 100 // Definicja czasu rozgłoszeniowego dla AP [not in use]
 
 // put Task declarations here:
 void status_LED(void *ignore);
@@ -238,9 +240,12 @@ void softap_init(void *ignore)
     memset(&ap_config, 0, sizeof(ap_config));         // Wyczyść strukturę
     sprintf((char *)ap_config.ssid, ESP_AP_SSID);     // Ustaw SSID
     sprintf((char *)ap_config.password, ESP_AP_PASS); // Ustaw hasło
-    ap_config.authmode = AUTH_WPA_WPA2_PSK;           // Ustaw tryb szyfrowania na WPA/WPA2
-    ap_config.max_connection = MAX_CLIENTS;           // Maksymalna liczba połączeń
     ap_config.ssid_len = strlen(ESP_AP_SSID);         // Długość SSID
+    // ap_config.channel = ESP_AP_CHANNEL;                 // Ustaw kanał
+    ap_config.authmode = AUTH_WPA_WPA2_PSK;        // Ustaw tryb szyfrowania na WPA/WPA2
+    ap_config.max_connection = ESP_AP_MAX_CLIENTS; // Ustaw maksymalną liczbe połączeń
+    // ap_config.ssid_hidden = ESP_AP_HIDDEN;              // Ustaw widoczność sieci
+    // ap_config.beacon_interval = ESP_AP_beacon_interval; // Ustaw czas rozgłoszeniowy dla AP (100 ~ 60000 ms)
 
     wifi_softap_set_config(&ap_config); // Zastosuj konfigurację AP
 
@@ -249,6 +254,7 @@ void softap_init(void *ignore)
     IP4_ADDR(&ip_info.gw, 192, 168, 1, 1);        // Ustaw bramę dla AP (adres IP, do którego będą kierowane pakiety spoza podsieci)
     IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0); // Ustaw maskę podsieci (umożliwia rozróżnienie części sieciowej od części hosta)
 
+    wifi_softap_dhcps_stop();              // Zatrzymanie DHCP w celu nadania statycznego adresu IP dla AP
     wifi_set_ip_info(SOFTAP_IF, &ip_info); // Zastosuj ustawienia IP
 
     struct dhcps_lease dhcp_lease;                    // Konfiguracja DHCP - automatyczne przydzielanie klientom IP z puli adresów
@@ -256,15 +262,17 @@ void softap_init(void *ignore)
     IP4_ADDR(&dhcp_lease.start_ip, 192, 168, 1, 100); // Początkowy adres IP dla DHCP
     IP4_ADDR(&dhcp_lease.end_ip, 192, 168, 1, 150);   // Końcowy adres IP dla DHCP
 
-    wifi_softap_set_dhcps_lease(&dhcp_lease); // Zastosuj leasing DHCP
-    wifi_softap_dhcps_start();                // Uruchom serwer DHCP
+    wifi_softap_set_dhcps_lease(&dhcp_lease);                               // Zastosuj leasing DHCP
+    bool esp_ap_offer_router = 1;                                           // Ustawienie na 1, aby włączyć funkcję OFFER_ROUTER
+    wifi_softap_set_dhcps_offer_option(OFFER_ROUTER, &esp_ap_offer_router); // Przekazanie klientowi informacji o bramie domyślnej (routerze)
+    wifi_softap_dhcps_start();                                              // Uruchom serwer DHCP
 
     // for debug
     // os_printf("Access Point Ready\r\n");
     // vTaskDelay(5000 / portTICK_RATE_MS);
     // os_printf("\e[1;1H\e[2J\r\r"); // clear screen in terminal
 
-    start_tcp_server(); // test
+    start_tcp_server(); // Utworzenie TCP serwera
 
     vTaskDelete(NULL); // Usunięcie zadania
 }
