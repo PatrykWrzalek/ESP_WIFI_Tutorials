@@ -10,15 +10,21 @@
 #define MAX_SSID_LENGTH 32 // Maksymalna długość SSID (nazwy sieci)
 #define MAX_NETWORKS 20    // Maksymalna ilość sieci (wyszukiwanych)
 
-#define ESP_AP_SSID "ESP_Iot"  // Definicja SSID
-#define ESP_AP_PASS "12345678" // Definicja hasła
-#define MAX_CLIENTS 4          // Definicja max ilości klientów
-#define CHANNEL 0              // Definicja kanału (not in use)
+#define ESP_AP_SSID "ESP_Iot"      // Definicja SSID dla AP
+#define ESP_AP_PASS "12345678"     // Definicja hasła dla AP
+#define ESP_AP_CHANNEL 0           // Definicja kanału dla AP [not in use]
+#define ESP_AP_MAX_CLIENTS 4       // Definicja max ilości klientów dla AP (max 4)
+#define ESP_AP_HIDDEN 0            // Definicja widoczności sieci dla AP (0 - sieć widoczna, 1 - sieć ukryta) [not in use]
+#define ESP_AP_beacon_interval 100 // Definicja czasu rozgłoszeniowego dla AP [not in use]
+
+#define WIFI_AP_SSID "WiFi SSID"     // Definicja nazwy sieci z którą zamierzamy się połączyć
+#define WIFI_AP_PASSWORD "WiFi PASS" // Definicja hasła dla WiFi z którym zamierzamy się połączyć
 
 // put Task declarations here:
 void status_LED(void *ignore);
 void wifi_scan(void *ignore);
 void softap_init(void *ignore);
+void conn_wifi_init(void *ignore);
 
 // put function declarations here:
 void scan_done(void *arg, STATUS status);
@@ -49,6 +55,48 @@ err_t tcp_accept_callback(void *arg, struct tcp_pcb *newpcb, err_t err)
     tcp_close(newpcb); // Zamknij połączenie
 
     return ERR_OK; // Zwróć status OK, co oznacza pomyślne zakończenie obsługi połączenia
+}
+
+// Funkcja callback do obsługi zdarzeń WiFi
+void wifi_handle_event_cb(System_Event_t *evt)
+{
+    switch (evt->event_id) // Sprawdź rodzaj zdarzenia
+    {
+    case EVENT_STAMODE_CONNECTED: // Gdy urządzenie ESP połączy się z siecią WiFi (STATION mode)
+        os_printf("connect to ssid %s, channel %d\r\n", evt->event_info.connected.ssid,
+                  evt->event_info.connected.channel); // Wypisz SSID sieci oraz kanał
+        break;
+
+    case EVENT_STAMODE_DISCONNECTED: // Gdy urządzenie ESP rozłączy się z siecią WiFi
+        os_printf("disconnect from ssid %s, reason %d\r\n", evt->event_info.disconnected.ssid,
+                  evt->event_info.disconnected.reason); // Wypisz SSID oraz powód rozłączenia
+        break;
+
+    case EVENT_STAMODE_AUTHMODE_CHANGE: // Gdy zmieni się tryb uwierzytelniania
+        os_printf("mode: %d -> %d\r\n", evt->event_info.auth_change.old_mode, evt->event_info.auth_change.new_mode);
+        // Wypisz stary i nowy tryb uwierzytelniania
+        break;
+
+    case EVENT_STAMODE_GOT_IP: // Gdy urządzenie ESP otrzyma adres IP od serwera DHCP
+        os_printf("ip:" IPSTR ",mask:" IPSTR ",gw:" IPSTR, IP2STR(&evt->event_info.got_ip.ip),
+                  IP2STR(&evt->event_info.got_ip.mask), IP2STR(&evt->event_info.got_ip.gw));
+        // Wypisz adres IP, maskę podsieci oraz adres bramy
+        os_printf("\r\n"); // Zakończ linię
+        break;
+
+    case EVENT_SOFTAPMODE_STACONNECTED: // Gdy nowe urządzenie (klient) połączy się z ESP działającym jako AP
+        os_printf("station: " MACSTR "join, AID = %d\r\n", MAC2STR(evt->event_info.sta_connected.mac),
+                  evt->event_info.sta_connected.aid); // Wypisz adres MAC klienta oraz jego AID (identyfikator)
+        break;
+
+    case EVENT_SOFTAPMODE_STADISCONNECTED: // Gdy urządzenie (klient) rozłączy się z ESP działającym jako AP
+        os_printf("station: " MACSTR "leave, AID = %d\r\n", MAC2STR(evt->event_info.sta_disconnected.mac),
+                  evt->event_info.sta_disconnected.aid); // Wypisz adres MAC klienta oraz jego AID
+        break;
+
+    default:
+        break; // Jeżeli zdarzenie nie jest rozpoznane, nic nie rób
+    }
 }
 /******************************************************************************
  * FunctionName : user_rf_cal_sector_set
@@ -126,8 +174,9 @@ void user_init(void) // there is a main() function
     UART_ParamConfig(UART0, &uart0_conf); // Wgranie konfiguracji UART0
     UART_SetPrintPort(UART0);             // Wybranie uart do komunikacji przez funkcję os_printf
 
-    // xTaskCreate(wifi_scan, "WiFi", 1024, NULL, 3, NULL);
-    xTaskCreate(softap_init, "WiFi", 4096, NULL, 3, NULL);
+    // xTaskCreate(wifi_scan, "ESP STA", 1024, NULL, 3, NULL);
+    // xTaskCreate(softap_init, "ESP AP", 4096, NULL, 3, NULL);
+    xTaskCreate(conn_wifi_init, "ESP STA-AP", 4096, NULL, 3, NULL);
 
     xTaskCreate(status_LED, "Status", 512, NULL, 1, NULL);
 }
@@ -238,9 +287,12 @@ void softap_init(void *ignore)
     memset(&ap_config, 0, sizeof(ap_config));         // Wyczyść strukturę
     sprintf((char *)ap_config.ssid, ESP_AP_SSID);     // Ustaw SSID
     sprintf((char *)ap_config.password, ESP_AP_PASS); // Ustaw hasło
-    ap_config.authmode = AUTH_WPA_WPA2_PSK;           // Ustaw tryb szyfrowania na WPA/WPA2
-    ap_config.max_connection = MAX_CLIENTS;           // Maksymalna liczba połączeń
     ap_config.ssid_len = strlen(ESP_AP_SSID);         // Długość SSID
+    // ap_config.channel = ESP_AP_CHANNEL;                 // Ustaw kanał
+    ap_config.authmode = AUTH_WPA_WPA2_PSK;        // Ustaw tryb szyfrowania na WPA/WPA2
+    ap_config.max_connection = ESP_AP_MAX_CLIENTS; // Ustaw maksymalną liczbe połączeń
+    // ap_config.ssid_hidden = ESP_AP_HIDDEN;              // Ustaw widoczność sieci
+    // ap_config.beacon_interval = ESP_AP_beacon_interval; // Ustaw czas rozgłoszeniowy dla AP (100 ~ 60000 ms)
 
     wifi_softap_set_config(&ap_config); // Zastosuj konfigurację AP
 
@@ -249,6 +301,7 @@ void softap_init(void *ignore)
     IP4_ADDR(&ip_info.gw, 192, 168, 1, 1);        // Ustaw bramę dla AP (adres IP, do którego będą kierowane pakiety spoza podsieci)
     IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0); // Ustaw maskę podsieci (umożliwia rozróżnienie części sieciowej od części hosta)
 
+    wifi_softap_dhcps_stop();              // Zatrzymanie DHCP w celu nadania statycznego adresu IP dla AP
     wifi_set_ip_info(SOFTAP_IF, &ip_info); // Zastosuj ustawienia IP
 
     struct dhcps_lease dhcp_lease;                    // Konfiguracja DHCP - automatyczne przydzielanie klientom IP z puli adresów
@@ -256,15 +309,17 @@ void softap_init(void *ignore)
     IP4_ADDR(&dhcp_lease.start_ip, 192, 168, 1, 100); // Początkowy adres IP dla DHCP
     IP4_ADDR(&dhcp_lease.end_ip, 192, 168, 1, 150);   // Końcowy adres IP dla DHCP
 
-    wifi_softap_set_dhcps_lease(&dhcp_lease); // Zastosuj leasing DHCP
-    wifi_softap_dhcps_start();                // Uruchom serwer DHCP
+    wifi_softap_set_dhcps_lease(&dhcp_lease);                               // Zastosuj leasing DHCP
+    bool esp_ap_offer_router = 1;                                           // Ustawienie na 1, aby włączyć funkcję OFFER_ROUTER
+    wifi_softap_set_dhcps_offer_option(OFFER_ROUTER, &esp_ap_offer_router); // Przekazanie klientowi informacji o bramie domyślnej (routerze)
+    wifi_softap_dhcps_start();                                              // Uruchom serwer DHCP
 
     // for debug
     // os_printf("Access Point Ready\r\n");
     // vTaskDelay(5000 / portTICK_RATE_MS);
     // os_printf("\e[1;1H\e[2J\r\r"); // clear screen in terminal
 
-    start_tcp_server(); // test
+    start_tcp_server(); // Utworzenie TCP serwera
 
     vTaskDelete(NULL); // Usunięcie zadania
 }
@@ -294,4 +349,34 @@ void start_tcp_server()
         // Jeśli nie udało się utworzyć PCB, wyświetl komunikat o błędzie
         os_printf("Error: Unable to create TCP server PCB\r\n");
     }
+}
+/******************************************************************************
+ * FunctionName : conn_wifi_init
+ * Description  : Function to initialize connection between ESP and WiFi.
+ * Parameters   : none
+ * Returns      : none
+ *******************************************************************************/
+void conn_wifi_init(void *ignore)
+{
+    // os_printf("Inicjalizacja...\r\n"); // for debug
+    vTaskDelay(10000 / portTICK_RATE_MS);               // Inicjacja WiFi po 10s, czas na włączenie podglądu portu szeregowego
+    wifi_set_opmode(STATIONAP_MODE);                    // Ustaw tryb STATION + AP
+    struct station_config config;                       // Zainicjuj strukturę konfiguracji Soft AP
+    memset(&config, 0, sizeof(config));                 // Wyczyść strukturę
+    sprintf((char *)config.ssid, WIFI_AP_SSID);         // Ustaw SSID WiFi z którym się łączysz
+    sprintf((char *)config.password, WIFI_AP_PASSWORD); // Ustaw hasło WiFi z którym się łączysz
+    if (wifi_station_set_hostname((char *)ESP_AP_SSID)) // Ustaw nazwę hosta ESP (nazwa urządzenia widoczna przez router)
+    {
+        os_printf("ESP hostname set to: %s\r\n", wifi_station_get_hostname()); // for debug
+    }
+    else
+    {
+        os_printf("Can't set ESP hostname!\r\nESP hostname is: %s\r\n", wifi_station_get_hostname()); // for debug
+    }
+
+    wifi_station_set_config(&config);                // Zastosuj konfigurację
+    wifi_set_event_handler_cb(wifi_handle_event_cb); // Ustaw callback dla zdarzeń WiFi
+    wifi_station_connect();                          // Połącz się z siecią
+
+    vTaskDelete(NULL); // Usunięcie zadania
 }
