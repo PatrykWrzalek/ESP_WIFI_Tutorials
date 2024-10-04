@@ -5,6 +5,7 @@
 #include "uart.h"
 #include "lwip\netifapi.h"
 #include "lwip\lwip\tcp.h"
+#include "ESP_TCP.h"
 
 // put definition here:
 #define MAX_SSID_LENGTH 32 // Maksymalna długość SSID (nazwy sieci)
@@ -33,7 +34,7 @@ void start_tcp_server();
 // put global variables, etc. here:
 struct tcp_pcb *server_pcb;
 
-// Funkcja callback do obsługi przychodzących połączeń i wysłania "Hello World"
+/*// Funkcja callback do obsługi przychodzących połączeń i wysłania "Hello World"
 err_t tcp_accept_callback(void *arg, struct tcp_pcb *newpcb, err_t err)
 {
     // Tworzymy wiadomość odpowiedzi HTTP
@@ -55,7 +56,7 @@ err_t tcp_accept_callback(void *arg, struct tcp_pcb *newpcb, err_t err)
     tcp_close(newpcb); // Zamknij połączenie
 
     return ERR_OK; // Zwróć status OK, co oznacza pomyślne zakończenie obsługi połączenia
-}
+}*/
 
 // Funkcja callback do obsługi zdarzeń WiFi
 void wifi_handle_event_cb(System_Event_t *evt)
@@ -175,8 +176,8 @@ void user_init(void) // there is a main() function
     UART_SetPrintPort(UART0);             // Wybranie uart do komunikacji przez funkcję os_printf
 
     // xTaskCreate(wifi_scan, "ESP STA", 1024, NULL, 3, NULL);
-    // xTaskCreate(softap_init, "ESP AP", 4096, NULL, 3, NULL);
-    xTaskCreate(conn_wifi_init, "ESP STA-AP", 4096, NULL, 3, NULL);
+    xTaskCreate(softap_init, "ESP AP", 4096, NULL, 3, NULL);
+    // xTaskCreate(conn_wifi_init, "ESP STA-AP", 4096, NULL, 3, NULL);
 
     xTaskCreate(status_LED, "Status", 512, NULL, 1, NULL);
 }
@@ -294,14 +295,21 @@ void softap_init(void *ignore)
     // ap_config.ssid_hidden = ESP_AP_HIDDEN;              // Ustaw widoczność sieci
     // ap_config.beacon_interval = ESP_AP_beacon_interval; // Ustaw czas rozgłoszeniowy dla AP (100 ~ 60000 ms)
 
-    wifi_softap_set_config(&ap_config); // Zastosuj konfigurację AP
+    wifi_softap_set_config(&ap_config);                            // Zastosuj konfigurację AP
+    struct station_info *station = wifi_softap_get_station_info(); // Pobranie informacji o połączonych klientach
+    while (station)
+    {
+        os_printf("Podlaczone STA (old): \r\nbssid : MACSTR, \r\nip : IPSTR/n\r\n", MAC2STR(station->bssid), IP2STR(&station->ip));
+        station = STAILQ_NEXT(station, next);
+    }
+    wifi_softap_free_station_info(); // Zwolnienie miejsca po przez zwolnienie danych dotyczących podłączonych stacji
+    wifi_softap_dhcps_stop();        // Zatrzymanie DHCP w celu nadania statycznego adresu IP dla AP
 
     struct ip_info ip_info;                       // Ustawienia IP dla trybu AP
     IP4_ADDR(&ip_info.ip, 192, 168, 1, 1);        // Ustaw adres IP dla AP
     IP4_ADDR(&ip_info.gw, 192, 168, 1, 1);        // Ustaw bramę dla AP (adres IP, do którego będą kierowane pakiety spoza podsieci)
     IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0); // Ustaw maskę podsieci (umożliwia rozróżnienie części sieciowej od części hosta)
 
-    wifi_softap_dhcps_stop();              // Zatrzymanie DHCP w celu nadania statycznego adresu IP dla AP
     wifi_set_ip_info(SOFTAP_IF, &ip_info); // Zastosuj ustawienia IP
 
     struct dhcps_lease dhcp_lease;                    // Konfiguracja DHCP - automatyczne przydzielanie klientom IP z puli adresów
@@ -336,18 +344,25 @@ void start_tcp_server()
     if (server_pcb != NULL)
     {
         // Jeśli PCB zostało poprawnie utworzone, serwer przechodzi do nasłuchiwania
-        tcp_bind(server_pcb, IP_ADDR_ANY, 80); // Powiąż serwer z dowolnym adresem IP i portem 80 (standardowy port HTTP)
+        err_t err = tcp_bind(server_pcb, IP_ADDR_ANY, 80); // Powiąż serwer z dowolnym adresem IP i portem 80 (standardowy port HTTP)
 
-        server_pcb = tcp_listen(server_pcb); // Ustaw serwer w trybie nasłuchiwania na nowe połączenia
+        if (err == ERR_OK)
+        {
+            server_pcb = tcp_listen(server_pcb); // Ustaw serwer w trybie nasłuchiwania na nowe połączenia
 
-        tcp_accept(server_pcb, tcp_accept_callback); // Zarejestruj funkcję callback do obsługi nowych połączeń
+            tcp_accept(server_pcb, tcp_accept_callback); // Zarejestruj funkcję callback do obsługi nowych połączeń
 
-        os_printf("Created TCP server PCB\r\n");
+            os_printf("Created TCP server PCB.\r\n");
+        }
+        else
+        {
+            os_printf("TCP binding error!\r\n");
+        }
     }
     else
     {
         // Jeśli nie udało się utworzyć PCB, wyświetl komunikat o błędzie
-        os_printf("Error: Unable to create TCP server PCB\r\n");
+        os_printf("Error: Unable to create TCP server PCB!\r\n");
     }
 }
 /******************************************************************************
