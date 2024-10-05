@@ -5,6 +5,7 @@
 #include "uart.h"
 #include "lwip\netifapi.h"
 #include "lwip\lwip\tcp.h"
+#include "lwip\lwip\sockets.h"
 #include "ESP_TCP.h"
 
 // put definition here:
@@ -29,10 +30,8 @@ void conn_wifi_init(void *ignore);
 
 // put function declarations here:
 void scan_done(void *arg, STATUS status);
-void start_tcp_server();
 
 // put global variables, etc. here:
-struct tcp_pcb *server_pcb;
 
 /*// Funkcja callback do obsługi przychodzących połączeń i wysłania "Hello World"
 err_t tcp_accept_callback(void *arg, struct tcp_pcb *newpcb, err_t err)
@@ -176,8 +175,8 @@ void user_init(void) // there is a main() function
     UART_SetPrintPort(UART0);             // Wybranie uart do komunikacji przez funkcję os_printf
 
     // xTaskCreate(wifi_scan, "ESP STA", 1024, NULL, 3, NULL);
-    xTaskCreate(softap_init, "ESP AP", 4096, NULL, 3, NULL);
-    // xTaskCreate(conn_wifi_init, "ESP STA-AP", 4096, NULL, 3, NULL);
+    // xTaskCreate(softap_init, "ESP AP", 4096, NULL, 3, NULL);
+    xTaskCreate(conn_wifi_init, "ESP STA-AP", 4096, NULL, 3, NULL);
 
     xTaskCreate(status_LED, "Status", 512, NULL, 1, NULL);
 }
@@ -332,38 +331,53 @@ void softap_init(void *ignore)
     vTaskDelete(NULL); // Usunięcie zadania
 }
 /******************************************************************************
- * FunctionName : start_tcp_server
- * Description  : Function to initialize the TCP server.
+ * FunctionName : get_time_from_API
+ * Description  : Function to get time from API.
  * Parameters   : none
  * Returns      : none
  *******************************************************************************/
-void start_tcp_server()
+void get_time_from_API()
 {
-    server_pcb = tcp_new(); // Utwórz nową strukturę PCB (Protocol Control Block)
+    struct sockaddr_in server_addr; // Struktura do przechowywania adresu serwera
+    int sock;                       // Zmienna do przechowywania uchwytu gniazda
+    char request[256];              // Bufor do przechowywania żądania HTTP
+    char response[512];             // Bufor do przechowywania odpowiedzi serwera
+    int bytes_received;             // Zmienna do przechowywania liczby odebranych bajtów
 
-    if (server_pcb != NULL)
-    {
-        // Jeśli PCB zostało poprawnie utworzone, serwer przechodzi do nasłuchiwania
-        err_t err = tcp_bind(server_pcb, IP_ADDR_ANY, 80); // Powiąż serwer z dowolnym adresem IP i portem 80 (standardowy port HTTP)
-
-        if (err == ERR_OK)
-        {
-            server_pcb = tcp_listen(server_pcb); // Ustaw serwer w trybie nasłuchiwania na nowe połączenia
-
-            tcp_accept(server_pcb, tcp_accept_callback); // Zarejestruj funkcję callback do obsługi nowych połączeń
-
-            os_printf("Created TCP server PCB.\r\n");
-        }
-        else
-        {
-            os_printf("TCP binding error!\r\n");
-        }
+    // Tworzenie gniazda
+    sock = socket(AF_INET, SOCK_STREAM, 0); // Tworzenie gniazda TCP
+    if (sock < 0)
+    {                                           // Sprawdzanie, czy gniazdo zostało poprawnie utworzone
+        os_printf("Error creating socket\r\n"); // Wyświetlenie błędu
+        return;                                 // Zakończenie funkcji
     }
-    else
+
+    // Ustawienia adresu serwera
+    server_addr.sin_family = AF_INET;                         // Ustawienie rodziny adresów na IPv4
+    server_addr.sin_port = htons(80);                         // Ustawienie portu na 80 (HTTP)
+    server_addr.sin_addr.s_addr = ipaddr_addr("20.49.104.6"); // Ustawienie adresu IP serwera
+
+    // Nawiązywanie połączenia z serwerem
+    if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
     {
-        // Jeśli nie udało się utworzyć PCB, wyświetl komunikat o błędzie
-        os_printf("Error: Unable to create TCP server PCB!\r\n");
+        os_printf("Connection failed\r\n"); // Wyświetlenie błędu, jeśli połączenie się nie powiodło
+        close(sock);                        // Zamykanie gniazda
+        return;                             // Zakończenie funkcji
     }
+
+    // Utworzenie żądania HTTP GET
+    sprintf(request, "GET /api/json/utc/now HTTP/1.1\r\nHost: worldclockapi.com\r\nConnection: close\r\n\r\n");
+    send(sock, request, strlen(request), 0); // Wysłanie żądania do serwera
+
+    // Odbieranie odpowiedzi
+    while ((bytes_received = recv(sock, response, sizeof(response) - 1, 0)) > 0)
+    {
+        response[bytes_received] = '\0'; // Zakończenie odpowiedzi NULL, aby móc ją poprawnie wyświetlić
+        os_printf("%s", response);       // Wyświetl odpowiedź w terminalu
+    }
+
+    // Zamykanie gniazda
+    close(sock); // Zamknięcie gniazda po zakończeniu operacji
 }
 /******************************************************************************
  * FunctionName : conn_wifi_init
@@ -374,7 +388,24 @@ void start_tcp_server()
 void conn_wifi_init(void *ignore)
 {
     // os_printf("Inicjalizacja...\r\n"); // for debug
-    vTaskDelay(10000 / portTICK_RATE_MS);               // Inicjacja WiFi po 10s, czas na włączenie podglądu portu szeregowego
+    vTaskDelay(10000 / portTICK_RATE_MS); // Inicjacja WiFi po 10s, czas na włączenie podglądu portu szeregowego
+
+    // Non-volatile storage
+    // struct esp_spiffs_config SPIFFS_conf;
+    // SPIFFS_conf.phys_size = 0;
+    // SPIFFS_conf.phys_addr = 0;
+    // SPIFFS_conf.phys_erase_block = 0;
+    // SPIFFS_conf.log_block_size = 0;
+    // SPIFFS_conf.log_page_size = 0;
+    // SPIFFS_conf.fd_buf_size = 0;
+    // SPIFFS_conf.cache_buf_size = 0;
+    // if (esp_spiffs_init(SPIFFS_conf))
+    // {
+    //     os_printf("SPIFFS initialization failed\r\n\r\n");
+    //     esp_spiffs_deinit(1); // Sformatowanie i deinit SPIFFS w przypadku błędu
+    // }
+    netif_init(); // TCP/IP initialization
+
     wifi_set_opmode(STATIONAP_MODE);                    // Ustaw tryb STATION + AP
     struct station_config config;                       // Zainicjuj strukturę konfiguracji Soft AP
     memset(&config, 0, sizeof(config));                 // Wyczyść strukturę
@@ -392,6 +423,9 @@ void conn_wifi_init(void *ignore)
     wifi_station_set_config(&config);                // Zastosuj konfigurację
     wifi_set_event_handler_cb(wifi_handle_event_cb); // Ustaw callback dla zdarzeń WiFi
     wifi_station_connect();                          // Połącz się z siecią
+
+    vTaskDelay(5000 / portTICK_RATE_MS);
+    get_time_from_API();
 
     vTaskDelete(NULL); // Usunięcie zadania
 }

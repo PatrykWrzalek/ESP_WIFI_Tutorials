@@ -1,6 +1,41 @@
 #include "ESP_TCP.h"
 
 /******************************************************************************
+ * FunctionName : start_tcp_server
+ * Description  : Function to initialize the TCP server.
+ * Parameters   : none
+ * Returns      : none
+ *******************************************************************************/
+void start_tcp_server()
+{
+    server_pcb = tcp_new(); // Utwórz nową strukturę PCB (Protocol Control Block)
+
+    if (server_pcb != NULL)
+    {
+        // Jeśli PCB zostało poprawnie utworzone, serwer przechodzi do nasłuchiwania
+        err_t err = tcp_bind(server_pcb, IP_ADDR_ANY, 80); // Powiąż serwer z dowolnym adresem IP i portem 80 (standardowy port HTTP)
+
+        if (err == ERR_OK)
+        {
+            server_pcb = tcp_listen(server_pcb); // Ustaw serwer w trybie nasłuchiwania na nowe połączenia
+
+            tcp_accept(server_pcb, tcp_accept_callback); // Zarejestruj funkcję callback do obsługi nowych połączeń
+
+            os_printf("Created TCP server PCB.\r\n");
+        }
+        else
+        {
+            os_printf("TCP binding error!\r\n");
+        }
+    }
+    else
+    {
+        // Jeśli nie udało się utworzyć PCB, wyświetl komunikat o błędzie
+        os_printf("Error: Unable to create TCP server PCB!\r\n");
+    }
+}
+
+/******************************************************************************
  * FunctionName : tcp_accept_callback
  * Description  : tcp accept callback functions. Called when a new
  *                connection can be accepted on a listening pcb.

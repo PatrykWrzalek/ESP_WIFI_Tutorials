@@ -7,11 +7,15 @@
 #include "lwip\netifapi.h"
 #include "lwip\lwip\tcp.h"
 
+void start_tcp_server();
+
 err_t tcp_accept_callback(void *arg, struct tcp_pcb *newpcb, err_t err);
 
 err_t tcp_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
 err_t tcp_sent_callback(void *arg, struct tcp_pcb *tpcb, u16_t len);
 void tcp_err_callback(void *arg, err_t err);
 err_t tcp_poll_callback(void *arg, struct tcp_pcb *tpcb);
+
+struct tcp_pcb *server_pcb; // TCP protocol control block
 
 #endif
