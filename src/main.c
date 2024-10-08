@@ -7,6 +7,7 @@
 #include "lwip\lwip\tcp.h"
 #include "lwip\lwip\sockets.h"
 #include "ESP_TCP.h"
+#include "fcntl.h"
 
 // put definition here:
 #define MAX_SSID_LENGTH 32 // Maksymalna długość SSID (nazwy sieci)
@@ -22,11 +23,30 @@
 #define WIFI_AP_SSID "WiFi SSID"     // Definicja nazwy sieci z którą zamierzamy się połączyć
 #define WIFI_AP_PASSWORD "WiFi PASS" // Definicja hasła dla WiFi z którym zamierzamy się połączyć
 
+/*//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////*/
+// Ustawienia dla 4MB Flash, gdzie 1024KB (1MB) jest przeznaczone na kod programu (bootloader, OTA in future itp.)      //
+// https://github.com/bcmi-labs/Esp-Link/blob/master/document/2A-ESP8266__IOT_SDK_User_Manual__EN_v1.5.pdf              //
+// Również należy sprawdzić jak defaultowo rezerwuje pamięć PlatformIO ..sdk\ld\eagle.flash.4m1m.ld                     //
+// W moim przypadku firmware od adresu 0x20000, a dane konfiguracyjne od adresu 0x3fc000                                //
+// Stąd zarezerwowana przestrzeń przed firmwarem dla SPIFFS w platform.ini:                                             //
+// board_build.spiffs_start = 0x100000   ; offset dla SPIFFS                                                            //
+// board_build.spiffs_size = 0x40000     ; rozmiar SPIFFS (256KB)                                                       //
+/*//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////*/
+#define SPIFFS_PHYS_ADDR1 0x100000                      // Adres początkowy SPIFFS w pamięci Flash (początek 1MB)
+#define SPIFFS_PHYS_SIZE1 (256 * 1024)                  // 256 KB przestrzeni na SPIFFS
+#define SPIFFS_PHYS_ERASE_BLOCK 4096                    // Typowy rozmiar bloku kasowania Flash (4 KB)
+#define SPIFFS_LOG_BLOCK_SIZE (SPIFFS_PHYS_ERASE_BLOCK) // Rozmiar logicznego bloku (musi być >= niż fizyczny blok)
+#define SPIFFS_LOG_PAGE_SIZE 256                        // Rozmiar logicznej strony (minimalna jednostka zapisu)
+
+#define FD_BUF_SIZE 32 * 4                             // Bufor na deskryptory plików (liczba plików otwartych jednocześnie)
+#define CACHE_BUF_SIZE (SPIFFS_LOG_PAGE_SIZE + 32) * 4 // Bufor na cache dla operacji odczytu/zapisu
+
 // put Task declarations here:
 void status_LED(void *ignore);
 void wifi_scan(void *ignore);
 void softap_init(void *ignore);
 void conn_wifi_init(void *ignore);
+void SPIFFS_test(void *ignore);
 
 // put function declarations here:
 void scan_done(void *arg, STATUS status);
@@ -174,9 +194,11 @@ void user_init(void) // there is a main() function
     UART_ParamConfig(UART0, &uart0_conf); // Wgranie konfiguracji UART0
     UART_SetPrintPort(UART0);             // Wybranie uart do komunikacji przez funkcję os_printf
 
+    xTaskCreate(SPIFFS_test, "SPIFFS", 4096, NULL, 5, NULL);
+
     // xTaskCreate(wifi_scan, "ESP STA", 1024, NULL, 3, NULL);
-    // xTaskCreate(softap_init, "ESP AP", 4096, NULL, 3, NULL);
-    xTaskCreate(conn_wifi_init, "ESP STA-AP", 4096, NULL, 3, NULL);
+    xTaskCreate(softap_init, "ESP AP", 4096, NULL, 3, NULL);
+    // xTaskCreate(conn_wifi_init, "ESP STA-AP", 4096, NULL, 3, NULL);
 
     xTaskCreate(status_LED, "Status", 512, NULL, 1, NULL);
 }
@@ -390,20 +412,6 @@ void conn_wifi_init(void *ignore)
     // os_printf("Inicjalizacja...\r\n"); // for debug
     vTaskDelay(10000 / portTICK_RATE_MS); // Inicjacja WiFi po 10s, czas na włączenie podglądu portu szeregowego
 
-    // Non-volatile storage
-    // struct esp_spiffs_config SPIFFS_conf;
-    // SPIFFS_conf.phys_size = 0;
-    // SPIFFS_conf.phys_addr = 0;
-    // SPIFFS_conf.phys_erase_block = 0;
-    // SPIFFS_conf.log_block_size = 0;
-    // SPIFFS_conf.log_page_size = 0;
-    // SPIFFS_conf.fd_buf_size = 0;
-    // SPIFFS_conf.cache_buf_size = 0;
-    // if (esp_spiffs_init(SPIFFS_conf))
-    // {
-    //     os_printf("SPIFFS initialization failed\r\n\r\n");
-    //     esp_spiffs_deinit(1); // Sformatowanie i deinit SPIFFS w przypadku błędu
-    // }
     netif_init(); // TCP/IP initialization
 
     wifi_set_opmode(STATIONAP_MODE);                    // Ustaw tryb STATION + AP
@@ -428,4 +436,93 @@ void conn_wifi_init(void *ignore)
     get_time_from_API();
 
     vTaskDelete(NULL); // Usunięcie zadania
+}
+
+// Zapis do pliku (utworzenie nowego jak nie istnieje)
+void create_and_write_file()
+{
+    int fd = _open_r(NULL, "hello.txt", O_CREAT | O_RDWR, 0); // Otworzenie (lub stworzenie) pliku w trybie zapisu
+
+    if (fd >= 0)
+    {
+        char write_data[] = "Hello, SPIFFS!";               // Bufor do zapisu danych
+        _write_r(NULL, fd, write_data, sizeof(write_data)); // Zapis danych do pliku
+        _close_r(NULL, fd);                                 // Zamknięcie pliku
+
+        os_printf("File written successfully!\r\n");
+    }
+    else
+    {
+        os_printf("Failed to open file for writing!\r\n");
+    }
+}
+// Odczyt z pliku
+void read_file()
+{
+    int fd = _open_r(NULL, "hello.txt", O_RDONLY, 0); // Otworzenie pliku w trybie odczytu
+
+    if (fd >= 0)
+    {
+        char read_data[50];                              // Bufor do odczytu danych
+        _read_r(NULL, fd, read_data, sizeof(read_data)); // Odczyt danych z pliku
+
+        os_printf("File content: %s\r\n", read_data); // Wyświetlenie odczytanej zawartości
+
+        _close_r(NULL, fd); // Zamknięcie pliku
+    }
+    else
+    {
+        os_printf("Failed to open file for reading!\r\n");
+    }
+}
+/******************************************************************************
+ * FunctionName : SPIFFS_test
+ * Description  : Function to initialize SPIFFS and write/open txt file.
+ * Parameters   : none
+ * Returns      : none
+ *******************************************************************************/
+void SPIFFS_test(void *ignore)
+{
+    vTaskDelay(15000 / portTICK_RATE_MS);
+    flash_size_map size_map = system_get_flash_size_map();
+    os_printf("Flash size map: %d\r\n", size_map);
+
+    // Konfiguracja SPIFFS
+    struct esp_spiffs_config config;
+    config.phys_size = SPIFFS_PHYS_SIZE1;
+    config.phys_addr = SPIFFS_PHYS_ADDR1;
+    config.phys_erase_block = SPIFFS_PHYS_ERASE_BLOCK;
+    config.log_block_size = SPIFFS_LOG_BLOCK_SIZE;
+    config.log_page_size = SPIFFS_LOG_PAGE_SIZE;
+    config.fd_buf_size = FD_BUF_SIZE * 2;
+    config.cache_buf_size = CACHE_BUF_SIZE;
+
+    s32_t res;
+    for (uint8_t attempt = 0; attempt < 3; attempt++) // Trzykrotna próba zainicjowania SPIFFS
+    {
+        res = esp_spiffs_init(&config); // Inicjalizacja SPIFFS
+
+        if (res == SPIFFS_OK)
+        {
+            os_printf("SPIFFS init successfully on attempt %d.\r\n", attempt + 1);
+            break;
+        }
+        else
+        {
+            esp_spiffs_deinit(1); // Deinit i formatowanie SPIFFS w przypadku błędu inicjalizacji
+            if ((attempt == 2) && (res != SPIFFS_OK))
+            {
+                os_printf("SPIFFS init failed: %d\r\n", res);
+            }
+        }
+    }
+
+    if (res == SPIFFS_OK)
+    {
+        create_and_write_file(); // Zapis do pliku
+
+        read_file(); // Odczyt z pliku
+    }
+
+    vTaskDelete(NULL);
 }
