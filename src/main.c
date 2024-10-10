@@ -23,15 +23,21 @@
 #define WIFI_AP_SSID "WiFi SSID"     // Definicja nazwy sieci z którą zamierzamy się połączyć
 #define WIFI_AP_PASSWORD "WiFi PASS" // Definicja hasła dla WiFi z którym zamierzamy się połączyć
 
-/*//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////*/
-// Ustawienia dla 4MB Flash, gdzie 1024KB (1MB) jest przeznaczone na kod programu (bootloader, OTA in future itp.)      //
-// https://github.com/bcmi-labs/Esp-Link/blob/master/document/2A-ESP8266__IOT_SDK_User_Manual__EN_v1.5.pdf              //
-// Również należy sprawdzić jak defaultowo rezerwuje pamięć PlatformIO ..sdk\ld\eagle.flash.4m1m.ld                     //
-// W moim przypadku firmware od adresu 0x20000, a dane konfiguracyjne od adresu 0x3fc000                                //
-// Stąd zarezerwowana przestrzeń przed firmwarem dla SPIFFS w platform.ini:                                             //
-// board_build.spiffs_start = 0x100000   ; offset dla SPIFFS                                                            //
-// board_build.spiffs_size = 0x40000     ; rozmiar SPIFFS (256KB)                                                       //
-/*//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////*/
+/*//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////*/
+// Ustawienia dla 4MB Flash, gdzie 1024KB (1MB) jest przeznaczone na kod programu (bootloader, OTA in future itp.)          //
+// https://github.com/bcmi-labs/Esp-Link/blob/master/document/2A-ESP8266__IOT_SDK_User_Manual__EN_v1.5.pdf                  //
+// Również należy sprawdzić jak defaultowo rezerwuje pamięć PlatformIO ...\framework-esp8266-rtos-sdk\ld\eagle.app.v6.ld    //
+// W moim przypadku firmware od adresu 0x20000, a dane konfiguracyjne od adresu 0x3fc000                                    //
+// Stąd zarezerwowana przestrzeń przed firmwarem dla SPIFFS w platform.ini:                                                 //
+// board_build.spiffs_start = 0x100000   ; offset dla SPIFFS                                                                //
+// board_build.spiffs_size = 0x40000     ; rozmiar SPIFFS (256KB)                                                           //
+/*//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////*/
+// IMPORTANT NOTE:                                                                                                          //
+// Domyślnie PlatformIO posiada starą wersję IDF dla framework'u esp8266-rtos-sdk (1.5beta), stąd też nie jest możliwe na   //
+// niej np. stworzyć folder z danymi do flash, a ustawianie własnej mapy falsh przez pliki np. partitions.csv wygląda       //
+// inaczej. Dlatego, aby móc wykonać powyższe czynności najlepiej na ten moment 10.10.2024 skorzystać z IDE ESP IDF zamiasta//
+// PlatformIO. Wersję można sprawdzić w pliku .json ścieżka C:\Users\"Name"\.platformio\packages\framework-esp8266-rtos-sdk //
+/*//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////*/
 #define SPIFFS_PHYS_ADDR1 0x100000                      // Adres początkowy SPIFFS w pamięci Flash (początek 1MB)
 #define SPIFFS_PHYS_SIZE1 (256 * 1024)                  // 256 KB przestrzeni na SPIFFS
 #define SPIFFS_PHYS_ERASE_BLOCK 4096                    // Typowy rozmiar bloku kasowania Flash (4 KB)
